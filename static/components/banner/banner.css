@@ -1,50 +1,76 @@
+/* 🔶 主 Banner（橘色框框） */
 #banner {
   position: absolute;
   top: 10px;
   left: 10px;
-  width: 350px;
 
-  background-color: #c47d3b; /* 深色背景以增加對比 */
-  color: #ecf0f1; /* 淺色文字 */
+  /* 這裡改成 auto 適應內容寬度 */
+  min-width: 350px;
+  max-width: 100%;            
+
+  background-color: #c47d3b;  /* 深橘色背景 */
+  color: #ecf0f1;             /* 字體淺色 */
+
   border-radius: 8px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   border: none;
   z-index: 10;
+
   display: flex;
-  align-items: center; /* 垂直置中內容 */
+  align-items: center;
   padding: 10px 20px;
+  box-sizing: border-box;     /* 避免 padding 撐爆外框 */
 }
 
-#banner img {
-  width: 50px; /* logo 大小 */
-  height: auto;
-  margin-right: 15px; /* logo 與標題之間的間距 */
-}
-
-#banner h1 {
-  font-size: 1.2rem;
-  font-weight: bold;
-  margin: 0;
-  letter-spacing: 1px;
-}
-
+/* 🔶 Banner 主容器 */
 #banner-content {
   display: flex;
   align-items: center;
+  width: 100%;
+  gap: 20px;                  /* logo 與文字之間的間距 */
 }
 
+/* 🔶 Logo */
+#banner img,
 #banner-logo {
-  margin-right: 15px;
-  width: 50px; /* 根據需求調整 */
-  height: 50px; /* 根據需求調整 */
+  width: 50px;
+  height: 50px;
+  flex-shrink: 0;             /* 避免 logo 因為內容太長被壓縮 */
 }
 
+/* 🔶 文字區塊 */
 #banner-text {
   display: flex;
   flex-direction: column;
 }
 
+/* 🔶 系統標題 */
+#banner h1 {
+  font-size: 1.2rem;
+  font-weight: bold;
+  margin: 0;
+  letter-spacing: 1px;
+  white-space: nowrap;        /* 避免系統名稱換行 */
+}
+
+/* 🔶 時間區塊（外層） */
 #timestamp-container {
-  margin-top: 5px; /* 根據需求調整間距 */
+  margin-top: 5px;
   font-size: 14px;
+}
+
+/* 🔶 時間並排 */
+#timestamp-row {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;                  /* 台灣時間 vs UTC 時間之間間距 */
+  font-size: 14px;
+  margin-top: 5px;
+  color: #f1f1f1;
+  white-space: nowrap;        /* 避免時間換行 */
+}
+
+/* 🔶 時間文字不換行 */
+#timestamp-row span {
+  white-space: nowrap;
 }

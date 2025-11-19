@@ -180,7 +180,7 @@ loadAisBtn.addEventListener('click', async () => {
                         <tr><td>速度:</td><td>${speed} 節</td></tr>
                         <tr><td>航向:</td><td>${course}°</td></tr>
                         <tr><td>目的地:</td><td>${ship.destination || "未知"}</td></tr>
-                        <tr><td>最後更新:</td><td>${new Date(ship.timestamp).toLocaleString()}</td></tr>
+                        <tr><td>最後更新:</td><td>${new Date(ship.timestamp).toISOString()}</td></tr>
                     </table>
                 `//,
                 // // ✅ 儲存原始資料，用於鏡頭縮放時重繪箭頭
@@ -241,13 +241,33 @@ async function loadCCGShips() {
         // 顯示時間差格式
         function formatTimeDiff(timestamp) {
             if (!timestamp) return "未知";
-            const now = new Date();
-            const t = new Date(timestamp);
-            const diff = (now - t) / 1000;
-            if (diff < 60) return "剛剛更新";
-            if (diff < 3600) return `${Math.floor(diff / 60)} 分前`;
-            return `${Math.floor(diff / 3600)} 小時前`;
+
+            // ⭐ 你的 timestamp 是「沒有時區的 UTC」→ 強制加上 Z
+            const t = new Date(timestamp + "Z");
+
+            const tUTC = t.getTime();    // 這就是正確的 UTC
+            const nowUTC = Date.now();   // JS 的現在時間也是 UTC
+
+            const diffSec = (nowUTC - tUTC) / 1000;
+
+            let diffText;
+            if (diffSec < 60) diffText = "剛剛";
+            else if (diffSec < 3600) diffText = `${Math.floor(diffSec / 60)} 分前`;
+            else if (diffSec < 86400) diffText = `${Math.floor(diffSec / 3600)} 小時前`;
+            else diffText = `${Math.floor(diffSec / 86400)} 天前`;
+
+            // ==== 顯示 UTC ====
+            const yyyy = t.getUTCFullYear();
+            const mm = String(t.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(t.getUTCDate()).padStart(2, '0');
+            const hh = String(t.getUTCHours()).padStart(2, '0');
+            const min = String(t.getUTCMinutes()).padStart(2, '0');
+
+            return `${diffText}（UTC ${yyyy}/${mm}/${dd} ${hh}:${min}）`;
         }
+
+
+
 
         // 🔴 12 海浬內（紅色半透明）
         // 🔴 12 海浬內（紅色半透明）
@@ -581,9 +601,13 @@ async function updateCCGPanel() {
         function formatTimeDiff(timestamp) {
             if (!timestamp) return "未知";
 
-            const now = new Date();
-            const t = new Date(timestamp);
-            const diffSec = (now - t) / 1000;
+            // ⭐ 你的 timestamp 是「沒有時區的 UTC」→ 強制加上 Z
+            const t = new Date(timestamp + "Z");
+
+            const tUTC = t.getTime();    // 這就是正確的 UTC
+            const nowUTC = Date.now();   // JS 的現在時間也是 UTC
+
+            const diffSec = (nowUTC - tUTC) / 1000;
 
             let diffText;
             if (diffSec < 60) diffText = "剛剛";
@@ -591,16 +615,18 @@ async function updateCCGPanel() {
             else if (diffSec < 86400) diffText = `${Math.floor(diffSec / 3600)} 小時前`;
             else diffText = `${Math.floor(diffSec / 86400)} 天前`;
 
-            const localTime = new Date(t.getTime() + 8 * 60 * 60 * 1000);
-            const yyyy = localTime.getUTCFullYear();
-            const mm = String(localTime.getUTCMonth() + 1).padStart(2, '0');
-            const dd = String(localTime.getUTCDate()).padStart(2, '0');
-            const hh = String(localTime.getUTCHours()).padStart(2, '0');
-            const min = String(localTime.getUTCMinutes()).padStart(2, '0');
-            const formatted = `${yyyy}/${mm}/${dd} ${hh}:${min}`;
+            // ==== 顯示 UTC ====
+            const yyyy = t.getUTCFullYear();
+            const mm = String(t.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(t.getUTCDate()).padStart(2, '0');
+            const hh = String(t.getUTCHours()).padStart(2, '0');
+            const min = String(t.getUTCMinutes()).padStart(2, '0');
 
-            return `${diffText}（${formatted}）`;
+            return `${diffText}（UTC ${yyyy}/${mm}/${dd} ${hh}:${min}）`;
         }
+
+
+
 
         // 🚫 要排除的海警船清單
         const hiddenShips = ["CHINACOASTGUARD2303", "CHINACOASTGUARD 2303"];

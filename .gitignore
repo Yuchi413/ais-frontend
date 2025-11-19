@@ -1,0 +1,28 @@
+# Environment variables
+.env
+
+# Python virtual environment
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Model files
+*.pt
+
+# Logs / temp / processed output
+processed_image.jpg
+
+# Auto-generated / obfuscated js
+*obfuscated.js
+
+# Potential sensitive data
+vessel_data.json
+default.json
+
+# System files
+.DS_Store
+.vs/
+.vscode/

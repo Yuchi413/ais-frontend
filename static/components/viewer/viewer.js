@@ -6,6 +6,37 @@ loadCSS('components/viewer/viewer.css');
 // 載入 HTML 結構
 loadHTML(`
       <div id="cesiumContainer"></div>
+      <!-- 船種圖例（右下角、可拖曳、可收折） -->
+    <div id="shipLegend" class="draggable">
+      
+      <div id="legendHeader">
+        <span>船種圖例</span>
+        <button id="legendToggleBtn">－</button>
+      </div>
+
+      <div id="legendContent">
+        <div class="legend-item">
+          <span class="legend-color" style="background: rgba(0, 0, 255, 0.7);"></span>
+          <span>漁船 (2)</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-color" style="background: rgba(128, 128, 128, 0.7);"></span>
+          <span>貨船 (3 / 7 / 8)</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-color" style="background: rgba(255, 255, 0, 0.7);"></span>
+          <span>客船 (6)</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-color" style="background: rgba(255, 105, 180, 0.7);"></span>
+          <span>遊艇 (1 / 9)</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-color" style="background: rgba(0, 255, 255, 0.7);"></span>
+          <span>其他 (0 / 4 / 5)</span>
+        </div>
+      </div>
+    </div>
 `);
 
 // 設定 Cesium Ion 的存取權杖
@@ -21,7 +52,7 @@ export const viewer = new Cesium.Viewer('cesiumContainer', {
   homeButton: false,
   sceneModePicker: false,
   baseLayerPicker: false,
-  geocoder: false,
+  geocoder: true,
   infoBox: true,
   selectionIndicator: false,
   navigationInstructionsInitiallyVisible: false,
@@ -41,3 +72,50 @@ viewer.camera.flyTo({
 });
 
 viewer.scene.globe.depthTestAgainstTerrain = false;
+
+
+// === 可收折圖例 ===
+document.addEventListener("DOMContentLoaded", () => {
+  const legend = document.getElementById("shipLegend");
+  const btn = document.getElementById("legendToggleBtn");
+
+  btn.addEventListener("click", () => {
+    const isCollapsed = legend.classList.toggle("collapsed");
+    btn.textContent = isCollapsed ? "＋" : "－";
+  });
+
+  // === 可拖曳功能 ===
+  let isDragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const header = document.getElementById("legendHeader");
+
+  header.addEventListener("mousedown", (e) => {
+    isDragging = true;
+    legend.classList.add("dragging");
+
+    // 計算偏移
+    offsetX = e.clientX - legend.getBoundingClientRect().left;
+    offsetY = e.clientY - legend.getBoundingClientRect().top;
+
+    e.preventDefault();
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (!isDragging) return;
+
+    const x = e.clientX - offsetX;
+    const y = e.clientY - offsetY;
+
+    legend.style.left = x + "px";
+    legend.style.top = y + "px";
+    legend.style.right = "unset";
+    legend.style.bottom = "unset";
+  });
+
+  document.addEventListener("mouseup", () => {
+    isDragging = false;
+    legend.classList.remove("dragging");
+  });
+});

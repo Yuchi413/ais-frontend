@@ -182,7 +182,20 @@ loadAisBtn.addEventListener('click', async () => {
                         <tr><td>目的地:</td><td>${ship.destination || "未知"}</td></tr>
                         <tr><td>最後更新:</td><td>${new Date(ship.timestamp).toISOString()}</td></tr>
                     </table>
-                `//,
+
+                    <br>
+
+                    <b>🔗 相關連結</b><br>
+                    🌐 <a href="https://www.google.com/maps?q=${ship.lat},${ship.lon}&z=10" target="_blank" style="color:#4aa3ff;">
+                        Google Maps
+                    </a><br>
+
+                    🚢 <a href="https://www.marinetraffic.com/en/ais/home/centerx:${ship.lon}/centery:${ship.lat}/zoom:12"
+                        target="_blank" style="color:#4aa3ff;">
+                        MarineTraffic（查看此船）
+                    </a>
+                `
+
                 // // ✅ 儲存原始資料，用於鏡頭縮放時重繪箭頭
                 // properties: {
                 //     lon: ship.lon,

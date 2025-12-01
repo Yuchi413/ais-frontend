@@ -1,18 +1,11 @@
-import time
 import os
-import io
 import math
 import json
 import requests
 from flask import Flask, request, send_from_directory, jsonify
 from flask_cors import CORS
-from PIL import Image, ImageDraw, ImageFont
-import torch
-from ultralytics import YOLO
-import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
-import cv2  # 使用 cv2.boxPoints 取得旋轉矩形的頂點
 from routes.blacklist_api import blacklist_api
 
 # 從 .env 文件中載入環境變數
@@ -24,16 +17,6 @@ CORS(app)
 
 # 載入黑名單 API
 app.register_blueprint(blacklist_api, url_prefix="/api")
-
-# 載入 YOLO11n OBB 模型（取代原本的 YOLOv8 模型）
-model = YOLO('yolov8n.pt')  # 舊版 YOLOv8 模型範例
-
-# 檢查是否有可用的 CUDA 並將模型移動到 GPU
-if torch.cuda.is_available():
-    model.to('cuda')
-    print("使用 CUDA 進行推理")
-else:
-    print("未啟用 CUDA，使用 CPU")
 
 # 設定 OpenAI API 金鑰
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -229,144 +212,6 @@ def serve_file(filename):
         return send_from_directory(FOLDER_PATH, filename, mimetype='text/css')
     return send_from_directory(FOLDER_PATH, filename)
 
-
-def split_image_into_tiles(image, tile_size, overlap):
-    width, height = image.size
-    tiles = []
-    for top in range(0, height, tile_size - overlap):
-        for left in range(0, width, tile_size - overlap):
-            right = min(left + tile_size, width)
-            bottom = min(top + tile_size, height)
-            box = (left, top, right, bottom)
-            tile = image.crop(box)
-            tiles.append((tile, left, top))
-    return tiles
-
-# 針對 yolo11n-obb.pt 的 OBB 偵測功能
-# def run_yolo11n_obb_on_batch_tiles(model, tiles, draw, font):
-#     # 將 PIL 影像轉為 numpy 陣列，建立批次輸入
-#     batch = [np.array(tile.convert('RGB')) for tile, _, _ in tiles]
-#     results = model(batch)
-#     bboxes = []
-#     for i, (tile, left, top) in enumerate(tiles):
-#         result = results[i]
-#         # 檢查 OBB 資訊是否存在
-#         if result.obb is None:
-#             continue
-#         # 假設 OBB 格式為 [中心點_x, 中心點_y, 寬度, 高度, 角度, 信心度, 類別編號]
-#         obb_data = result.obb.data.cpu().numpy()
-#         for obb in obb_data:
-#             cx, cy, w, h, angle, conf, cls = obb
-#             angle_deg = angle * 180.0 / math.pi  # 轉換為角度
-#             # 將 tile 偏移量轉為全域座標
-#             cx_global = cx + left
-#             cy_global = cy + top
-#             rect = ((cx_global, cy_global), (w, h), angle_deg)
-#             box = cv2.boxPoints(rect)
-#             box = np.intp(box)
-#             draw.polygon(list(map(tuple, box)), outline="red")
-#             x_text, y_text = int(np.min(box[:, 0])), int(np.min(box[:, 1]))
-#             class_id = int(cls)
-#             class_name = model.names[class_id] if model.names is not None else str(class_id)
-#             draw.text((x_text, y_text - 10), class_name, font=font, fill="red")
-#             bboxes.append({
-#                 "class_name": class_name,
-#                 "class_id": int(class_id),
-#                 "obb": [
-#                     float(cx_global),
-#                     float(cy_global),
-#                     float(w),
-#                     float(h),
-#                     float(angle),
-#                     float(conf)
-#                 ]
-#             })
-#     return bboxes
-def run_yolo11n_obb_on_batch_tiles(model, tiles, draw, font, allowed_classes=None):
-    # 定義預設顏色清單（若類別數超過清單數量，會重複循環）
-    colors = ['yellow','red', 'blue', 'green', 'magenta', 'cyan', 'orange', 'purple']
-    # 建立類別對應顏色的字典
-    class_color_map = {}
-    
-    # 將 PIL 影像轉為 numpy 陣列，建立批次輸入
-    batch = [np.array(tile.convert('RGB')) for tile, _, _ in tiles]
-    results = model(batch)
-    bboxes = []
-    for i, (tile, left, top) in enumerate(tiles):
-        result = results[i]
-        # 檢查 OBB 資訊是否存在
-        if result.obb is None:
-            continue
-        # 假設 OBB 格式為 [中心點_x, 中心點_y, 寬度, 高度, 角度, 信心度, 類別編號]
-        obb_data = result.obb.data.cpu().numpy()
-        for obb in obb_data:
-            cx, cy, w, h, angle, conf, cls = obb
-            class_id = int(cls)
-            class_name = model.names[class_id] if model.names is not None else str(class_id)
-            # 若指定了 allowed_classes，僅處理符合條件的類別
-            if allowed_classes is not None and class_name not in allowed_classes:
-                continue
-
-            angle_deg = angle * 180.0 / math.pi  # 轉換為角度
-            # 將 tile 偏移量轉為全域座標
-            cx_global = cx + left
-            cy_global = cy + top
-            rect = ((cx_global, cy_global), (w, h), angle_deg)
-            box = cv2.boxPoints(rect)
-            box = np.intp(box)
-            
-            # 依照類別決定顏色，若尚未建立對應則從 colors 清單中依序指派
-            if class_name not in class_color_map:
-                class_color_map[class_name] = colors[len(class_color_map) % len(colors)]
-            color = class_color_map[class_name]
-            
-            # 使用 draw.line 畫出較粗的偵測框（設定線寬為 3）
-            points = list(map(tuple, box))
-            draw.line(points + [points[0]], fill=color, width=3)
-            
-            x_text, y_text = int(np.min(box[:, 0])), int(np.min(box[:, 1]))
-            draw.text((x_text, y_text - 10), class_name, font=font, fill=color)
-            bboxes.append({
-                "class_name": class_name,
-                "class_id": class_id,
-                "obb": [
-                    float(cx_global),
-                    float(cy_global),
-                    float(w),
-                    float(h),
-                    float(angle),
-                    float(conf)
-                ]
-            })
-    return bboxes
-
-
-
-@app.route('/analyze', methods=['POST'])
-def analyze_image():
-    image_file = request.files['image']
-    image = Image.open(image_file)
-    width, height = image.size
-    image = image.convert('RGB')
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default()
-    tile_size = 1024
-    overlap = 0
-    tiles = split_image_into_tiles(image, tile_size, overlap)
-    # bboxes = run_yolo11n_obb_on_batch_tiles(model, tiles, draw, font)
-    bboxes = run_yolo11n_obb_on_batch_tiles(model, tiles, draw, font, allowed_classes=["plane", "ship", "storage tank", "helicopter"])
-
-    img_io = io.BytesIO()
-    image.save(img_io, 'JPEG')
-    img_io.seek(0)
-    processed_image_path = os.path.join(FOLDER_PATH, 'processed_image.jpg')
-    image.save(processed_image_path)
-    timestamp = int(time.time())
-    return {
-        "bboxes": bboxes,
-        "image_size": {"width": width, "height": height},
-        "image_path": f"/static/processed_image.jpg?t={timestamp}"
-    }
 
 @app.route('/generate', methods=['POST'])
 def generate_text():

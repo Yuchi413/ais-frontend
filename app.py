@@ -217,52 +217,49 @@ def serve_file(filename):
 def generate_text():
     try:
         data = request.get_json()
-        user_message = data.get('prompt', '')
+        user_message = (data.get('prompt') or '').strip()
         if not user_message:
             return jsonify({'error': '訊息為必填'}), 400
 
-        messages = [
-            {
-                "role": "system",
-                "content": '''
+        # ========= 1. system prompt：自然語言 + 不亂露座標 =========
+        system_prompt = '''
 你是個情報分析師，會使用繁體中文回覆。
-回覆時，若回答內容中有地名、地區名稱或景點，請分為兩部分回覆：
-1. 第一部分請完整回答使用者問題；
-2. 第二部分將所有地名及其經緯度座標以 GeoJSON 格式回傳，
-   若僅查詢單一地點，請回傳 Point；若有多個地點，請以 FeatureCollection 形式回傳。
-（中略：這裡保留你原本的說明與範例，不用改，只是我省略）
 
+請嚴格遵守以下規則：
+1. 先用自然語言完整回答使用者問題（第一部分），
+   說明地點的大致位置、所屬城市/區域、附近海域或地理背景等。
+2. 除非使用者在問題中「明確」要求經緯度或座標
+   （例如出現「經緯度」、「座標」、「latitude」、「longitude」等字眼），
+   否則你在自然語言回答中「不要」寫出任何數字形式的座標
+   （例如 25.03, 121.56 這種）。
+3. 若問題與地點、地區、景點或範圍有關，且你有透過工具取得座標或 GeoJSON，
+   請在回答的最後另外加上一段 GeoJSON 區塊，格式固定如下：
 
-例如：
-  問:
-    請問台北101和淡水老街的位置？
-  回答:
-    台北101位於台北市信義區，而淡水老街位於新北市淡水區，以下為這兩個地點的詳細資訊：
-    
-    geojson ```
-      {
-        "type": "FeatureCollection",
-        "features": [
-          {
-            "type": "Feature",
-            "geometry": { "type": "Point", "coordinates": [121.565, 25.033] },
-            "properties": { "name": "台北101" }
-          },
-          {
-            "type": "Feature",
-            "geometry": { "type": "Point", "coordinates": [121.4440921, 25.168927] },
-            "properties": { "name": "淡水老街" }
-          }
+   geojson ```
+   {
+     "type": "FeatureCollection",
+     "features": [
+       {
+         "type": "Feature",
+         "geometry": { "type": "Point", "coordinates": [121.565, 25.033] },
+         "properties": { "name": "台北101" }
+       },
+       {
+         "type": "Feature",
+         "geometry": { "type": "Point", "coordinates": [121.4440921, 25.168927] },
+         "properties": { "name": "淡水老街" }
+       }
+     ]
+   }
+
+    '''.strip()
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
         ]
-      }
-    ```
-請「一定要」先用自然語言完整回答問題（第一段）， 再決定是否需要進行 function_call。
-'''
-            },
-        ]
-        messages.append({"role": "user", "content": user_message})
 
-        # ✅ 使用新版 tools，而不是舊的 functions
+        # ========= 2. tools 定義 =========
         tools = [
             {
                 "type": "function",
@@ -333,8 +330,14 @@ def generate_text():
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "place_name": {"type": "string", "description": "例如 '三芝雷達站'"},
-                                        "radius_km": {"type": "number", "description": "例如 10"}
+                                        "place_name": {
+                                            "type": "string",
+                                            "description": "例如 '三芝雷達站'"
+                                        },
+                                        "radius_km": {
+                                            "type": "number",
+                                            "description": "例如 10"
+                                        }
                                     },
                                     "required": ["place_name", "radius_km"]
                                 },
@@ -372,140 +375,82 @@ def generate_text():
             }
         ]
 
-        # ✅ 新版呼叫方式：client.chat.completions.create
-        response = client.chat.completions.create(
+        # ========= 3. 第一次呼叫：讓模型決定要不要用 tools =========
+        first_response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=messages,
             tools=tools,
-            tool_choice="auto"
+            tool_choice="auto",
         )
 
-        response_message = response.choices[0].message  # 物件，不是 dict
+        assistant_message = first_response.choices[0].message
 
-        # ✅ 新版工具呼叫：tool_calls，而不是 function_call
-        if getattr(response_message, "tool_calls", None):
-            tool_call = response_message.tool_calls[0]
-            function_name = tool_call.function.name
+        # ========= 4. 若沒有 tool_calls，就直接回傳自然語言 =========
+        if not getattr(assistant_message, "tool_calls", None):
+            return jsonify({'response': assistant_message.content}), 200
+
+        # ========= 5. 有 tool_calls：實際執行 Python 函式 =========
+
+        # 把這次 assistant（帶 tool_calls）加回 messages
+        messages.append({
+            "role": "assistant",
+            "content": assistant_message.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in assistant_message.tool_calls
+            ],
+        })
+
+        # 逐一跑每個 tool_call，呼叫你在後端定義的函式
+        for tc in assistant_message.tool_calls:
+            fn_name = tc.function.name
+            raw_args = tc.function.arguments or "{}"
+
             try:
-                arguments = json.loads(tool_call.function.arguments)
+                arguments = json.loads(raw_args)
             except Exception as ex:
-                return jsonify({'error': '解析函式參數失敗: ' + str(ex)}), 500
-
-            # ===== 以下邏輯沿用你原本的分支，只是改用 function_name / arguments =====
-
-            if function_name == "get_multiple_buffer_polygons":
+                tool_result = {"error": f"解析函式參數失敗: {str(ex)}"}
+            else:
                 try:
-                    locations = arguments["locations"]
-                    if not isinstance(locations, list):
-                        return jsonify({'error': 'locations 應為列表'}), 400
+                    if fn_name == "get_location_coordinates":
+                        tool_result = get_location_coordinates(arguments["place_name"])
+                    elif fn_name == "get_multiple_locations":
+                        tool_result = get_multiple_locations(arguments["place_names"])
+                    elif fn_name == "get_buffer_polygon":
+                        radius = float(arguments["radius_km"])
+                        tool_result = get_buffer_polygon(arguments["place_name"], radius)
+                    elif fn_name == "get_multiple_buffer_polygons":
+                        tool_result = get_multiple_buffer_polygons(arguments["locations"])
+                    elif fn_name == "get_polygon_from_coordinates":
+                        tool_result = get_polygon_from_coordinates(arguments["coordinates"])
+                    else:
+                        tool_result = {"error": f"未知的工具名稱: {fn_name}"}
                 except Exception as ex:
-                    return jsonify({'error': '解析 locations 失敗: ' + str(ex)}), 500
+                    tool_result = {"error": f"執行工具時發生錯誤: {str(ex)}"}
 
-                geojson = get_multiple_buffer_polygons(locations)
-                if geojson:
-                    answer_text = "以下為各地點對應的圓形範圍及中心點："
-                else:
-                    answer_text = "找不到任何有效的地點資訊。"
-                final_reply = (
-                    f"{answer_text}\n\n"
-                    "geojson ```\n"
-                    f"{json.dumps(geojson, ensure_ascii=False, indent=2)}\n"
-                    "```"
-                )
-                return jsonify({'response': final_reply}), 200
+            # 把工具執行結果丟回模型，讓下一輪可以使用
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "name": fn_name,
+                "content": json.dumps(tool_result, ensure_ascii=False),
+            })
 
-            elif function_name == "get_multiple_locations":
-                try:
-                    place_names = arguments["place_names"]
-                    if not isinstance(place_names, list):
-                        return jsonify({'error': 'place_names 應為列表'}), 400
-                except Exception as ex:
-                    return jsonify({'error': '解析 place_names 失敗: ' + str(ex)}), 500
+        # ========= 6. 第二次呼叫：請模型根據工具結果產生「最終回答」 =========
+        second_response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=messages  # 不再帶 tools，避免無限迴圈
+        )
 
-                geojson = get_multiple_locations(place_names)
-                if geojson:
-                    answer_text = f"您提到的地點分別為：{', '.join(place_names)}。以下為詳細資訊："
-                else:
-                    answer_text = "找不到任何地點資訊。"
-                final_reply = (
-                    f"{answer_text}\n\n"
-                    "geojson ```\n"
-                    f"{json.dumps(geojson, ensure_ascii=False, indent=2)}\n"
-                    "```"
-                )
-                return jsonify({'response': final_reply}), 200
-
-            elif function_name == "get_buffer_polygon":
-                try:
-                    radius = float(arguments["radius_km"])
-                except Exception as ex:
-                    return jsonify({'error': '半徑參數錯誤: ' + str(ex)}), 400
-
-                geojson = get_buffer_polygon(arguments["place_name"], radius)
-                if geojson:
-                    answer_text = f"以 {arguments['place_name']} 為中心、半徑 {radius} 公里的範圍及中心點如下："
-                else:
-                    answer_text = f"找不到 {arguments['place_name']} 的相關資訊。"
-                final_reply = (
-                    f"{answer_text}\n\n"
-                    "geojson ```\n"
-                    f"{json.dumps(geojson, ensure_ascii=False, indent=2)}\n"
-                    "```"
-                )
-                return jsonify({'response': final_reply}), 200
-
-            elif function_name == "get_location_coordinates":
-                coordinates = get_location_coordinates(arguments["place_name"])
-                if coordinates:
-                    answer_text = f"地點：{arguments['place_name']}，經緯度：{coordinates}。"
-                    geojson_point = {
-                        "type": "FeatureCollection",
-                        "features": [
-                            {
-                                "type": "Feature",
-                                "geometry": {
-                                    "type": "Point",
-                                    "coordinates": [coordinates["longitude"], coordinates["latitude"]]
-                                },
-                                "properties": {
-                                    "name": arguments["place_name"]
-                                }
-                            }
-                        ]
-                    }
-                    final_reply = (
-                        f"{answer_text}\n\n"
-                        "geojson ```\n"
-                        f"{json.dumps(geojson_point, ensure_ascii=False, indent=2)}\n"
-                        "```"
-                    )
-                else:
-                    final_reply = f"找不到 {arguments['place_name']} 的相關資訊。"
-                return jsonify({'response': final_reply}), 200
-
-            elif function_name == "get_polygon_from_coordinates":
-                try:
-                    coords = arguments["coordinates"]
-                    if not isinstance(coords, list):
-                        return jsonify({'error': 'coordinates 應為列表'}), 400
-                except Exception as ex:
-                    return jsonify({'error': '解析 coordinates 失敗: ' + str(ex)}), 500
-
-                geojson = get_polygon_from_coordinates(coords)
-                if geojson:
-                    final_reply = (
-                        "已依序連線下列座標並形成多邊形：\n\n"
-                        "geojson ```\n"
-                        f"{json.dumps(geojson, ensure_ascii=False, indent=2)}\n"
-                        "```"
-                    )
-                else:
-                    final_reply = "座標數量不足，無法形成多邊形。"
-                return jsonify({'response': final_reply}), 200
-
-        else:
-            # ✅ 注意：新版 message 是物件，要用 .content
-            return jsonify({'response': response_message.content}), 200
+        final_message = second_response.choices[0].message
+        return jsonify({'response': final_message.content}), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -194,6 +194,100 @@ def get_polygon_from_coordinates(coordinates):
         ]
     }
 
+def get_offset_point_from_place(place_name, direction, distance_nm):
+    """
+    從指定地點出發，依照方位與距離（海浬）計算偏移點，
+    回傳一個 FeatureCollection：
+      - 基準點（base_point）
+      - 目標點（offset_point）
+      - 兩點之間的 LineString（arrow_line）
+    """
+    base = get_location_coordinates(place_name)
+    if not base:
+        return None
+
+    # 基準點座標
+    lat = base["latitude"]
+    lon = base["longitude"]
+
+    # 海浬 → 公里
+    distance_km = float(distance_nm) * 1.852
+
+    # 方位對應角度（0 = 正東, π/2 = 正北）
+    dir_map = {
+        "東": 0.0, "正東": 0.0,
+        "東北": math.pi / 4,
+        "北": math.pi / 2, "正北": math.pi / 2,
+        "西北": 3 * math.pi / 4,
+        "西": math.pi, "正西": math.pi,
+        "西南": 5 * math.pi / 4,
+        "南": 3 * math.pi / 2, "正南": 3 * math.pi / 2,
+        "東南": 7 * math.pi / 4,
+    }
+
+    angle = dir_map.get(direction)
+    if angle is None:
+        return None  # 模型給了奇怪方位就直接回 None
+
+    # 跟你 buffer 一樣的近似算法
+    delta_lat = (distance_km / 111.32) * math.sin(angle)
+    denom = 111.32 * math.cos(math.radians(lat))
+    delta_lon = (distance_km / denom) * math.cos(angle) if abs(denom) >= 1e-6 else 0.0
+
+    lat2 = lat + delta_lat
+    lon2 = lon + delta_lon
+
+    target_name = f"{place_name}{direction}外海{distance_nm}海浬"
+
+    features = [
+        # 1) 基準點
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [lon, lat]
+            },
+            "properties": {
+                "name": place_name,
+                "feature_type": "base_point"
+            }
+        },
+        # 2) 目標偏移點
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [lon2, lat2]
+            },
+            "properties": {
+                "name": target_name,
+                "feature_type": "offset_point",
+                "base_place": place_name,
+                "direction": direction,
+                "distance_nm": distance_nm
+            }
+        },
+        # 3) 兩點之間的連線（之後前端改成箭頭）
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [lon, lat],
+                    [lon2, lat2]
+                ]
+            },
+            "properties": {
+                "name": f"{place_name} → {target_name}",
+                "feature_type": "arrow_line"
+            }
+        }
+    ]
+
+    return {
+        "type": "FeatureCollection",
+        "features": features
+    }
 
 # --------------------- 結束地理位置相關的函式 ---------------------
 
@@ -372,6 +466,31 @@ def generate_text():
                         "required": ["coordinates"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_offset_point_from_place",
+                    "description": "從基準地點、方位與距離（海浬）計算偏移位置，適用於「基隆港東北外海10海浬」這類描述。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "place_name": {
+                                "type": "string",
+                                "description": "基準地點名稱，例如 '基隆港'"
+                            },
+                            "direction": {
+                                "type": "string",
+                                "description": "方位，例如 '東北', '東南', '西北', '正東', '正北', '正南', '西南' 等"
+                            },
+                            "distance_nm": {
+                                "type": "number",
+                                "description": "距離（海浬），例如 10 表示 10 海浬"
+                            }
+                        },
+                        "required": ["place_name", "direction", "distance_nm"]
+                    }
+                }
             }
         ]
 
@@ -430,6 +549,12 @@ def generate_text():
                         tool_result = get_multiple_buffer_polygons(arguments["locations"])
                     elif fn_name == "get_polygon_from_coordinates":
                         tool_result = get_polygon_from_coordinates(arguments["coordinates"])
+                    elif fn_name == "get_offset_point_from_place":
+                        tool_result = get_offset_point_from_place(
+                            arguments["place_name"],
+                            arguments["direction"],
+                            arguments["distance_nm"],
+                        )
                     else:
                         tool_result = {"error": f"未知的工具名稱: {fn_name}"}
                 except Exception as ex:

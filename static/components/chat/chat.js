@@ -102,26 +102,49 @@ function appendMessage(content, sender) {
       geoJsonDataSource.load(geojson).then(function (dataSource) {
         viewer.dataSources.add(dataSource);
 
-        dataSource.entities.values.forEach(function (entity) {
+      dataSource.entities.values.forEach(function (entity) {
+        const props = entity.properties || {};
+        const featureType = props.feature_type ? props.feature_type.getValue() : "";
+
+        // ===== 1. 點：基準點 / 目標點 =====
+        if (entity.position && !entity.polyline) {
+          // 圖釘
           entity.billboard = new Cesium.BillboardGraphics({
             image: 'https://img.icons8.com/emoji/48/000000/round-pushpin-emoji.png',
             width: 32,
             height: 32,
             heightReference: Cesium.HeightReference.CLAMP_TO_TERRAIN,
-            // verticalOrigin : Cesium.VerticalOrigin.BOTTOM,     // 垂直對齊
-            disableDepthTestDistance : 1000
+            disableDepthTestDistance: 1000
           });
-          
+
+          // 標籤顏色依類型區分
+          let labelColor = Cesium.Color.GREEN;
+          if (featureType === "base_point") {
+            labelColor = Cesium.Color.YELLOW;
+          } else if (featureType === "offset_point") {
+            labelColor = Cesium.Color.RED;
+          }
+
           entity.label = new Cesium.LabelGraphics({
-            text: entity.properties.name.getValue(),
+            text: props.name ? props.name.getValue() : "",
             font: '20pt sans-serif',
-            fillColor: Cesium.Color.GREEN,
+            fillColor: labelColor,
             pixelOffset: new Cesium.Cartesian2(0, -32),
             heightReference: Cesium.HeightReference.CLAMP_TO_TERRAIN,
-            // verticalOrigin : Cesium.VerticalOrigin.BOTTOM,     // 垂直對齊
-            disableDepthTestDistance : 1000
+            disableDepthTestDistance: 1000
           });
-        });
+        }
+
+        // ===== 2. 線：箭頭連線 =====
+        if (entity.polyline) {
+          entity.polyline.width = 4;
+          entity.polyline.material = new Cesium.PolylineArrowMaterialProperty(
+            Cesium.Color.RED
+          );
+          //entity.polyline.clampToGround = true;
+        }
+      });
+
 
         viewer.flyTo(dataSource, {
           offset: new Cesium.HeadingPitchRange(

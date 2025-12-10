@@ -194,100 +194,460 @@ def get_polygon_from_coordinates(coordinates):
         ]
     }
 
-def get_offset_point_from_place(place_name, direction, distance_nm):
+
+def load_geojson(geojson_data):
     """
-    從指定地點出發，依照方位與距離（海浬）計算偏移點，
-    回傳一個 FeatureCollection：
-      - 基準點（base_point）
-      - 目標點（offset_point）
-      - 兩點之間的 LineString（arrow_line）
+    驗證並載入 GeoJSON 資料。
+    參數 geojson_data 為 dict 或 JSON 字串，包含 type、features 等欄位。
+    若驗證成功則回傳該 GeoJSON，否則回傳 None。
     """
-    base = get_location_coordinates(place_name)
-    if not base:
-        return None
+    try:
+        # 若輸入為字串，先轉換成 dict
+        if isinstance(geojson_data, str):
+            data = json.loads(geojson_data)
+        else:
+            data = geojson_data
 
-    # 基準點座標
-    lat = base["latitude"]
-    lon = base["longitude"]
+        # 驗證基本結構
+        if not isinstance(data, dict):
+            return {"error": "GeoJSON 必須是 dict 或有效的 JSON 字串"}
 
-    # 海浬 → 公里
-    distance_km = float(distance_nm) * 1.852
+        if data.get("type") not in ["FeatureCollection", "Feature", "Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon", "GeometryCollection"]:
+            return {"error": "GeoJSON type 無效"}
 
-    # 方位對應角度（0 = 正東, π/2 = 正北）
-    dir_map = {
-        "東": 0.0, "正東": 0.0,
-        "東北": math.pi / 4,
-        "北": math.pi / 2, "正北": math.pi / 2,
-        "西北": 3 * math.pi / 4,
-        "西": math.pi, "正西": math.pi,
-        "西南": 5 * math.pi / 4,
-        "南": 3 * math.pi / 2, "正南": 3 * math.pi / 2,
-        "東南": 7 * math.pi / 4,
-    }
+        if "features" in data and not isinstance(data["features"], list):
+            return {"error": "features 必須是陣列"}
 
-    angle = dir_map.get(direction)
-    if angle is None:
-        return None  # 模型給了奇怪方位就直接回 None
+        # 驗證通過，回傳該 GeoJSON
+        return {"status": "success", "data": data}
 
-    # 跟你 buffer 一樣的近似算法
-    delta_lat = (distance_km / 111.32) * math.sin(angle)
-    denom = 111.32 * math.cos(math.radians(lat))
-    delta_lon = (distance_km / denom) * math.cos(angle) if abs(denom) >= 1e-6 else 0.0
+    except json.JSONDecodeError:
+        return {"error": "GeoJSON 格式錯誤，無法解析 JSON"}
+    except Exception as ex:
+        return {"error": f"載入 GeoJSON 時發生錯誤: {str(ex)}"}
 
-    lat2 = lat + delta_lat
-    lon2 = lon + delta_lon
 
-    target_name = f"{place_name}{direction}外海{distance_nm}海浬"
+# --------------------- 方位角與距離相關的函式 ---------------------
 
-    features = [
-        # 1) 基準點
-        {
-            "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [lon, lat]
-            },
-            "properties": {
-                "name": place_name,
-                "feature_type": "base_point"
-            }
+# 地球半徑（公里）
+EARTH_RADIUS_KM = 6371.0
+# 海里與公里的轉換係數
+KM_TO_NM = 0.539957  # 1 海里 ≈ 1.852 公里，反向轉換
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    使用 Haversine 公式計算兩點間的大圓距離
+    回傳: (distance_km, distance_nm)
+    """
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+    c = 2 * math.asin(math.sqrt(a))
+    
+    distance_km = EARTH_RADIUS_KM * c
+    distance_nm = distance_km * KM_TO_NM
+    
+    return distance_km, distance_nm
+
+
+def calculate_bearing(lat1, lon1, lat2, lon2):
+    """
+    計算從點1到點2的方位角（0-360度，0=北，90=東，180=南，270=西）
+    """
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    
+    dlon = lon2_rad - lon1_rad
+    
+    y = math.sin(dlon) * math.cos(lat2_rad)
+    x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon)
+    
+    bearing_rad = math.atan2(y, x)
+    bearing_deg = math.degrees(bearing_rad)
+    bearing_deg = (bearing_deg + 360) % 360
+    
+    return bearing_deg
+
+
+def destination_point(lat, lon, bearing_deg, distance_km):
+    """
+    根據起點、方位角和距離計算終點座標
+    """
+    lat_rad = math.radians(lat)
+    lon_rad = math.radians(lon)
+    bearing_rad = math.radians(bearing_deg)
+    
+    d = distance_km / EARTH_RADIUS_KM
+    
+    lat2_rad = math.asin(
+        math.sin(lat_rad) * math.cos(d) + 
+        math.cos(lat_rad) * math.sin(d) * math.cos(bearing_rad)
+    )
+    
+    lon2_rad = lon_rad + math.atan2(
+        math.sin(bearing_rad) * math.sin(d) * math.cos(lat_rad),
+        math.cos(d) - math.sin(lat_rad) * math.sin(lat2_rad)
+    )
+    
+    lat2 = math.degrees(lat2_rad)
+    lon2 = math.degrees(lon2_rad)
+    
+    return {"latitude": lat2, "longitude": lon2}
+
+
+def calculate_point_by_bearing_distance(origin_place, bearing_degrees, distance_km):
+    """
+    從指定地名按給定方位角和距離計算新座標，回傳目標點的經緯度及 GeoJSON
+    """
+    origin = get_location_coordinates(origin_place)
+    if not origin:
+        return {"error": f"無法找到地點: {origin_place}"}
+    
+    dest = destination_point(origin["latitude"], origin["longitude"], bearing_degrees, distance_km)
+    
+    features = []
+    
+    # 起點
+    origin_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [origin["longitude"], origin["latitude"]]
         },
-        # 2) 目標偏移點
-        {
-            "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [lon2, lat2]
-            },
-            "properties": {
-                "name": target_name,
-                "feature_type": "offset_point",
-                "base_place": place_name,
-                "direction": direction,
-                "distance_nm": distance_nm
-            }
-        },
-        # 3) 兩點之間的連線（之後前端改成箭頭）
-        {
-            "type": "Feature",
-            "geometry": {
-                "type": "LineString",
-                "coordinates": [
-                    [lon, lat],
-                    [lon2, lat2]
-                ]
-            },
-            "properties": {
-                "name": f"{place_name} → {target_name}",
-                "feature_type": "arrow_line"
-            }
+        "properties": {
+            "name": origin_place,
+            "feature_type": "origin"
         }
-    ]
-
+    }
+    
+    # 終點
+    dest_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [dest["longitude"], dest["latitude"]]
+        },
+        "properties": {
+            "name": f"{origin_place}東北方{bearing_degrees}°、{distance_km}km",
+            "feature_type": "destination"
+        }
+    }
+    
+    # 方位線
+    line_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [
+                [origin["longitude"], origin["latitude"]],
+                [dest["longitude"], dest["latitude"]]
+            ]
+        },
+        "properties": {
+            "name": "方位線",
+            "feature_type": "bearing_line",
+            "bearing_degrees": bearing_degrees,
+            "distance_km": distance_km,
+            "distance_nm": distance_km * KM_TO_NM,
+            "origin": origin_place
+        }
+    }
+    
+    features.extend([origin_feature, dest_feature, line_feature])
+    
     return {
         "type": "FeatureCollection",
         "features": features
     }
+
+
+def calculate_bearing_distance_between_points(origin_place, destination_place):
+    """
+    計算兩個地點之間的方位角、公里距離和海里距離
+    """
+    origin = get_location_coordinates(origin_place)
+    destination = get_location_coordinates(destination_place)
+    
+    if not origin:
+        return {"error": f"無法找到起點: {origin_place}"}
+    if not destination:
+        return {"error": f"無法找到終點: {destination_place}"}
+    
+    bearing = calculate_bearing(
+        origin["latitude"], origin["longitude"],
+        destination["latitude"], destination["longitude"]
+    )
+    distance_km, distance_nm = haversine_distance(
+        origin["latitude"], origin["longitude"],
+        destination["latitude"], destination["longitude"]
+    )
+    
+    features = []
+    
+    # 起點
+    origin_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [origin["longitude"], origin["latitude"]]
+        },
+        "properties": {
+            "name": origin_place,
+            "feature_type": "origin"
+        }
+    }
+    
+    # 終點
+    dest_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [destination["longitude"], destination["latitude"]]
+        },
+        "properties": {
+            "name": destination_place,
+            "feature_type": "destination"
+        }
+    }
+    
+    # 方位線
+    line_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [
+                [origin["longitude"], origin["latitude"]],
+                [destination["longitude"], destination["latitude"]]
+            ]
+        },
+        "properties": {
+            "name": "方位線",
+            "feature_type": "bearing_line",
+            "bearing_degrees": bearing,
+            "distance_km": distance_km,
+            "distance_nm": distance_nm,
+            "origin": origin_place,
+            "destination": destination_place
+        }
+    }
+    
+    features.extend([origin_feature, dest_feature, line_feature])
+    
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "bearing_degrees": bearing,
+        "distance_km": distance_km,
+        "distance_nm": distance_nm
+    }
+
+
+def get_line_from_bearing_distance(origin_place, bearing_degrees, distance_km):
+    """
+    從指定起點按方位角和距離繪製方位線，回傳 GeoJSON（包含起點、終點和連接線）
+    """
+    return calculate_point_by_bearing_distance(origin_place, bearing_degrees, distance_km)
+
+
+def calculate_multiple_bearings(origin_place, target_places):
+    """
+    從一個起點地名計算到多個目標地名的方位角和距離，回傳 GeoJSON 包含所有方位線
+    """
+    origin = get_location_coordinates(origin_place)
+    if not origin:
+        return {"error": f"無法找到起點: {origin_place}"}
+    
+    features = []
+    
+    # 添加起點
+    origin_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [origin["longitude"], origin["latitude"]]
+        },
+        "properties": {
+            "name": origin_place,
+            "feature_type": "origin"
+        }
+    }
+    features.append(origin_feature)
+    
+    # 計算到每個目標的方位和距離
+    for target_place in target_places:
+        destination = get_location_coordinates(target_place)
+        if not destination:
+            continue
+        
+        bearing = calculate_bearing(
+            origin["latitude"], origin["longitude"],
+            destination["latitude"], destination["longitude"]
+        )
+        distance_km, distance_nm = haversine_distance(
+            origin["latitude"], origin["longitude"],
+            destination["latitude"], destination["longitude"]
+        )
+        
+        # 目標點
+        target_feature = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [destination["longitude"], destination["latitude"]]
+            },
+            "properties": {
+                "name": target_place,
+                "feature_type": "target",
+                "bearing_degrees": bearing,
+                "distance_km": distance_km,
+                "distance_nm": distance_nm
+            }
+        }
+        features.append(target_feature)
+        
+        # 方位線
+        line_feature = {
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [origin["longitude"], origin["latitude"]],
+                    [destination["longitude"], destination["latitude"]]
+                ]
+            },
+            "properties": {
+                "name": f"到{target_place}的方位線",
+                "feature_type": "bearing_line",
+                "bearing_degrees": bearing,
+                "distance_km": distance_km,
+                "distance_nm": distance_nm,
+                "origin": origin_place,
+                "destination": target_place
+            }
+        }
+        features.append(line_feature)
+    
+    return {
+        "type": "FeatureCollection",
+        "features": features
+    }
+
+
+def find_points_in_bearing_range(origin_place, bearing_start, bearing_end, max_distance_km, target_places=None):
+    """
+    在指定的方位角範圍和距離內找出扇形區域，並可選地查找該區域內的目標點
+    """
+    origin = get_location_coordinates(origin_place)
+    if not origin:
+        return {"error": f"無法找到起點: {origin_place}"}
+    
+    # 生成扇形區域的邊界點
+    num_sector_points = 32
+    sector_points = []
+    
+    # 添加起點
+    sector_points.append([origin["longitude"], origin["latitude"]])
+    
+    # 從起始方位角到終止方位角的圓弧
+    bearing_diff = (bearing_end - bearing_start) % 360
+    if bearing_diff == 0:
+        bearing_diff = 360
+    
+    for i in range(num_sector_points + 1):
+        angle = bearing_start + (bearing_diff * i / num_sector_points)
+        point = destination_point(origin["latitude"], origin["longitude"], angle, max_distance_km)
+        sector_points.append([point["longitude"], point["latitude"]])
+    
+    # 回到起點完成多邊形
+    sector_points.append([origin["longitude"], origin["latitude"]])
+    
+    features = []
+    
+    # 起點
+    origin_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [origin["longitude"], origin["latitude"]]
+        },
+        "properties": {
+            "name": origin_place,
+            "feature_type": "origin"
+        }
+    }
+    features.append(origin_feature)
+    
+    # 扇形區域
+    sector_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [sector_points]
+        },
+        "properties": {
+            "name": f"扇形範圍({bearing_start}°-{bearing_end}°, {max_distance_km}km)",
+            "feature_type": "bearing_sector",
+            "bearing_start": bearing_start,
+            "bearing_end": bearing_end,
+            "max_distance_km": max_distance_km,
+            "origin": origin_place
+        }
+    }
+    features.append(sector_feature)
+    
+    # 查找目標點（如果提供了）
+    if target_places:
+        for target_place in target_places:
+            destination = get_location_coordinates(target_place)
+            if not destination:
+                continue
+            
+            bearing = calculate_bearing(
+                origin["latitude"], origin["longitude"],
+                destination["latitude"], destination["longitude"]
+            )
+            distance_km, distance_nm = haversine_distance(
+                origin["latitude"], origin["longitude"],
+                destination["latitude"], destination["longitude"]
+            )
+            
+            # 檢查是否在扇形範圍內
+            bearing_in_range = (bearing_start <= bearing <= bearing_end) or \
+                             ((bearing_start > bearing_end) and (bearing >= bearing_start or bearing <= bearing_end))
+            distance_ok = distance_km <= max_distance_km
+            
+            if bearing_in_range and distance_ok:
+                target_feature = {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [destination["longitude"], destination["latitude"]]
+                    },
+                    "properties": {
+                        "name": target_place,
+                        "feature_type": "target_in_range",
+                        "bearing_degrees": bearing,
+                        "distance_km": distance_km,
+                        "distance_nm": distance_nm
+                    }
+                }
+                features.append(target_feature)
+    
+    return {
+        "type": "FeatureCollection",
+        "features": features
+    }
+
+
+
 
 # --------------------- 結束地理位置相關的函式 ---------------------
 
@@ -336,17 +696,28 @@ def generate_text():
        {
          "type": "Feature",
          "geometry": { "type": "Point", "coordinates": [121.565, 25.033] },
-         "properties": { "name": "台北101" }
+         "properties": { "name": "台北101", "feature_type": "point" }
        },
        {
          "type": "Feature",
-         "geometry": { "type": "Point", "coordinates": [121.4440921, 25.168927] },
-         "properties": { "name": "淡水老街" }
+         "geometry": { "type": "LineString", "coordinates": [[121.565, 25.033], [121.4440921, 25.168927]] },
+         "properties": { "name": "台北到淡水", "feature_type": "line" }
+       },
+       {
+         "type": "Feature",
+         "geometry": { "type": "Polygon", "coordinates": [[[121.565, 25.033], [121.4440921, 25.168927], [121.6, 25.1], [121.565, 25.033]]] },
+         "properties": { "name": "目標區域", "feature_type": "polygon" }
        }
      ]
    }
 
-    '''.strip()
+4. 當使用者提到方向和距離時（例如「東北方 100 海浬」、「南西方 50 公里」），
+   請使用方位角計算工具來找出確切位置。方向詞彙對應關係：
+   - 北 = 0°, 北東 = 45°, 東 = 90°, 南東 = 135°
+   - 南 = 180°, 南西 = 225°, 西 = 270°, 北西 = 315°
+   - 東北方 ≈ 45°, 東南方 ≈ 135°, 西南方 ≈ 225°, 西北方 ≈ 315°
+   記住：1 海浬 ≈ 1.852 公里，計算時需要轉換單位。
+'''.strip()
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -470,25 +841,144 @@ def generate_text():
             {
                 "type": "function",
                 "function": {
-                    "name": "get_offset_point_from_place",
-                    "description": "從基準地點、方位與距離（海浬）計算偏移位置，適用於「基隆港東北外海10海浬」這類描述。",
+                    "name": "load_geojson",
+                    "description": "驗證並載入 GeoJSON 資料（支援點、線、面等多種圖徵）",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "place_name": {
+                            "geojson_data": {
                                 "type": "string",
-                                "description": "基準地點名稱，例如 '基隆港'"
-                            },
-                            "direction": {
-                                "type": "string",
-                                "description": "方位，例如 '東北', '東南', '西北', '正東', '正北', '正南', '西南' 等"
-                            },
-                            "distance_nm": {
-                                "type": "number",
-                                "description": "距離（海浬），例如 10 表示 10 海浬"
+                                "description": "GeoJSON 格式的字串或 JSON 物件，例如包含 Point、LineString、Polygon 等圖徵"
                             }
                         },
-                        "required": ["place_name", "direction", "distance_nm"]
+                        "required": ["geojson_data"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculate_point_by_bearing_distance",
+                    "description": "從指定地名按給定方位角和距離計算新座標並生成方位線的 GeoJSON",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "origin_place": {
+                                "type": "string",
+                                "description": "起點地名，例如 '台北港'"
+                            },
+                            "bearing_degrees": {
+                                "type": "number",
+                                "description": "方位角（0-360度，0=北，90=東，180=南，270=西）"
+                            },
+                            "distance_km": {
+                                "type": "number",
+                                "description": "距離，單位公里。注意：若使用者提供的是海浬，請轉換（1海浬≈1.852公里）"
+                            }
+                        },
+                        "required": ["origin_place", "bearing_degrees", "distance_km"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculate_bearing_distance_between_points",
+                    "description": "計算兩個地點之間的方位角、公里距離和海里距離，並繪製方位線",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "origin_place": {
+                                "type": "string",
+                                "description": "起點地名"
+                            },
+                            "destination_place": {
+                                "type": "string",
+                                "description": "終點地名"
+                            }
+                        },
+                        "required": ["origin_place", "destination_place"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_line_from_bearing_distance",
+                    "description": "從指定起點按方位角和距離繪製方位線，回傳 GeoJSON（包含起點、終點和連接線）",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "origin_place": {
+                                "type": "string",
+                                "description": "起點地名"
+                            },
+                            "bearing_degrees": {
+                                "type": "number",
+                                "description": "方位角（度）"
+                            },
+                            "distance_km": {
+                                "type": "number",
+                                "description": "距離（公里）"
+                            }
+                        },
+                        "required": ["origin_place", "bearing_degrees", "distance_km"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculate_multiple_bearings",
+                    "description": "從一個起點地名計算到多個目標地名的方位角和距離，回傳 GeoJSON 包含所有方位線",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "origin_place": {
+                                "type": "string",
+                                "description": "起點地名"
+                            },
+                            "target_places": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "目標地名列表，例如 ['淡水', '基隆', '宜蘭']"
+                            }
+                        },
+                        "required": ["origin_place", "target_places"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "find_points_in_bearing_range",
+                    "description": "在指定的方位角範圍和距離內生成扇形區域，並可選地查找該區域內的目標點",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "origin_place": {
+                                "type": "string",
+                                "description": "起點地名"
+                            },
+                            "bearing_start": {
+                                "type": "number",
+                                "description": "起始方位角（度）"
+                            },
+                            "bearing_end": {
+                                "type": "number",
+                                "description": "終止方位角（度）"
+                            },
+                            "max_distance_km": {
+                                "type": "number",
+                                "description": "扇形最大距離（公里）"
+                            },
+                            "target_places": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "可選，要查找的目標地點列表"
+                            }
+                        },
+                        "required": ["origin_place", "bearing_start", "bearing_end", "max_distance_km"]
                     }
                 }
             }
@@ -549,12 +1039,26 @@ def generate_text():
                         tool_result = get_multiple_buffer_polygons(arguments["locations"])
                     elif fn_name == "get_polygon_from_coordinates":
                         tool_result = get_polygon_from_coordinates(arguments["coordinates"])
-                    elif fn_name == "get_offset_point_from_place":
-                        tool_result = get_offset_point_from_place(
-                            arguments["place_name"],
-                            arguments["direction"],
-                            arguments["distance_nm"],
-                        )
+                    elif fn_name == "load_geojson":
+                        tool_result = load_geojson(arguments["geojson_data"])
+                    elif fn_name == "calculate_point_by_bearing_distance":
+                        bearing = float(arguments["bearing_degrees"])
+                        distance = float(arguments["distance_km"])
+                        tool_result = calculate_point_by_bearing_distance(arguments["origin_place"], bearing, distance)
+                    elif fn_name == "calculate_bearing_distance_between_points":
+                        tool_result = calculate_bearing_distance_between_points(arguments["origin_place"], arguments["destination_place"])
+                    elif fn_name == "get_line_from_bearing_distance":
+                        bearing = float(arguments["bearing_degrees"])
+                        distance = float(arguments["distance_km"])
+                        tool_result = get_line_from_bearing_distance(arguments["origin_place"], bearing, distance)
+                    elif fn_name == "calculate_multiple_bearings":
+                        tool_result = calculate_multiple_bearings(arguments["origin_place"], arguments["target_places"])
+                    elif fn_name == "find_points_in_bearing_range":
+                        bearing_start = float(arguments["bearing_start"])
+                        bearing_end = float(arguments["bearing_end"])
+                        max_dist = float(arguments["max_distance_km"])
+                        target_places = arguments.get("target_places", None)
+                        tool_result = find_points_in_bearing_range(arguments["origin_place"], bearing_start, bearing_end, max_dist, target_places)
                     else:
                         tool_result = {"error": f"未知的工具名稱: {fn_name}"}
                 except Exception as ex:

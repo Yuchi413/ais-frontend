@@ -291,7 +291,7 @@ async function loadCCGShips() {
 
             // 🚫 忽略特定海警船（防呆 + 大小寫 + 空白）
             const name = (ship.shipname || "").trim().toUpperCase();
-            if (name === "CHINACOASTGUARD2303" || name === "CHINACOASTGUARD 2303") return;
+            if (name === "CHINACOASTGUARD14532" || name === "CHINACOASTGUARD14532") return;
 
             const entity = viewer.entities.add({
                 name: ship.shipname || "Unknown",
@@ -329,7 +329,7 @@ async function loadCCGShips() {
             if (!ship.lat || !ship.lon) return;
 
             const name = (ship.shipname || "").trim().toUpperCase();
-            if (name === "CHINACOASTGUARD2303" || name === "CHINACOASTGUARD 2303") return;
+            if (name === "CHINACOASTGUARD14532" || name === "CHINACOASTGUARD14532") return;
 
             const entity = viewer.entities.add({
                 name: ship.shipname || "Unknown",
@@ -642,12 +642,12 @@ async function updateCCGPanel() {
 
 
         // 🚫 要排除的海警船清單
-        const hiddenShips = ["CHINACOASTGUARD2303", "CHINACOASTGUARD 2303"];
+        const hiddenShips = ["CHINACOASTGUARD14532", "CHINACOASTGUARD14532"];
 
         // 更新 12nm 內列表
         data12.boats.forEach(ship => {
-            const name = (ship.shipname || "").trim().toUpperCase();
-            if (hiddenShips.includes(name)) return;  // ← 跳過 2303
+            //const name = (ship.shipname || "").trim().toUpperCase();
+            //if (hiddenShips.includes(name)) return;  // ← 跳過 2303
 
             const li = document.createElement("li");
             li.innerHTML = `

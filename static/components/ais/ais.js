@@ -122,8 +122,9 @@ loadAisBtn.addEventListener('click', async () => {
 
         // 🚫 不再清空所有實體，只移除非海警船的實體
         viewer.entities.values
-            .filter(e => !ccgEntities.includes(e)) // 保留 CCG 船
-            .forEach(e => viewer.entities.remove(e));
+        .filter(e => !ccgEntities.includes(e) && !cnEntities.includes(e))
+        .forEach(e => viewer.entities.remove(e));
+
 
 
         // 若後端有回傳 count/data 結構
@@ -233,6 +234,9 @@ setToday();
 // 建立一個專門存 CCG 船的陣列
 let ccgEntities = [];
 
+// ★ 建立一個專門存 CN 最新位置的陣列
+let cnEntities = [];   // ★
+
 // 載入海警船資料（12nm 紅色半透明、12–24nm 黃色半透明，旁邊顯示船名）
 async function loadCCGShips() {
     try {
@@ -285,7 +289,7 @@ async function loadCCGShips() {
         // 🔴 12 海浬內（紅色半透明）
         // 🔴 12 海浬內（紅色半透明）
         data12.boats.forEach(ship => {
-            if (!toggleCN.checked) return;
+            if (!toggleCCG.checked) return;
 
             if (!ship.lat || !ship.lon) return;
 
@@ -378,6 +382,10 @@ async function loadCCGShips() {
 // ================================
 async function loadLatestShips() {
     try {
+        // ★ 每次先把舊的 CN entity 清掉
+        cnEntities.forEach(e => viewer.entities.remove(e));  // ★
+        cnEntities = [];                                     // ★
+
         const resp = await fetch("http://127.0.0.1:5000/api/chinaboat/latest");
         const data = await resp.json();
         const boats = data.data || [];
@@ -405,22 +413,22 @@ async function loadLatestShips() {
             const course = parseFloat(ship.course) || 0;
             const arrowLength = 10 + speed * 100;
 
-            viewer.entities.add({
+            const entity = viewer.entities.add({
                 name: ship.shipname || "Unknown",
                 position: Cesium.Cartesian3.fromDegrees(ship.lon, ship.lat),
-
-                // ⭐ 改成箭頭！
                 polyline: getArrowPolyline(ship.lon, ship.lat, course, arrowLength, color),
-
                 description: `
-                    <b>${ship.shipname || "Unknown"}</b><br>
-                    經緯度: ${ship.lat.toFixed(5)}, ${ship.lon.toFixed(5)}<br>
-                    速度: ${ship.speed || "未知"} 節<br>
-                    航向: ${ship.course || "未知"}°<br>
-                    類型: ${ship.shiptype || "未知"}<br>
-                    更新時間: ${ship.timestamp || "未知"}
+                    <table>
+                    <tr><td>船名:</td><td>${ship.shipname || "未知"}</td></tr>
+                    <tr><td>速度:</td><td>${ship.speed ?? "—"} 節</td></tr>
+                    <tr><td>航向:</td><td>${ship.course ?? "—"}°</td></tr>
+                    <tr><td>最後更新:</td><td>${ship.timestamp || "未知"}</td></tr>
+                    </table>
+                    
                 `
             });
+            cnEntities.push(entity);
+
         });
 
         console.log("✅ CN 最新船舶（箭頭）顯示完成");
@@ -684,14 +692,12 @@ async function updateCCGPanel() {
 
 // CN 船顯示控制
 toggleCN.addEventListener('change', () => {
-
-    // 清除所有非 CCG 的 entity（避免殘留）
-    viewer.entities.values
-        .filter(e => !ccgEntities.includes(e))
-        .forEach(e => viewer.entities.remove(e));
-
-    if (toggleCN.checked) {
-        loadLatestShips();  // 顯示 CN 最新位置
+    if (!toggleCN.checked) {
+        // 把目前所有 CN 最新位置清掉
+        cnEntities.forEach(e => viewer.entities.remove(e));
+        cnEntities = [];
+    } else {
+        loadLatestShips();
     }
 });
 
@@ -710,3 +716,22 @@ toggleCCG.addEventListener('change', () => {
 // 初始化 + 每分鐘自動更新
 updateCCGPanel();
 setInterval(updateCCGPanel, 60000);
+
+// ★★★ 每 10 分鐘自動更新 CN / CCG 圖層 ★★★
+setInterval(() => {
+    console.log("⏱ 自動刷新 CN / CCG 圖層");
+
+    if (toggleCN.checked) {
+        loadLatestShips();
+    } else {
+        cnEntities.forEach(e => viewer.entities.remove(e));
+        cnEntities = [];
+    }
+
+    if (toggleCCG.checked) {
+        loadCCGShips();
+    } else {
+        ccgEntities.forEach(e => viewer.entities.remove(e));
+        ccgEntities = [];
+    }
+}, 600000); // 600000 ms = 10 分鐘

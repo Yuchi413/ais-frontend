@@ -161,7 +161,21 @@ async function addExternalGeoJsonLayer(name, url) {
                 ent.polyline.width = 3;
                 ent.polyline.material = Cesium.Color.RED.withAlpha(0.8);
             }
+
+            // ✅ 讓 InfoBox 的 source 變成可點連結
+            const date = getProp(ent, "date");
+            const source = getProp(ent, "source");
+
+            if (date || source) {
+                ent.description = `
+                <table class="cesium-infoBox-defaultTable">
+                    <tr><th>date</th><td>${date || "—"}</td></tr>
+                    <tr><th>source</th><td>${linkify(source)}</td></tr>
+                </table>
+                `;
+            }
         });
+
 
         dataSource.show = false;
         createGeoJsonListItem(name, dataSource);
@@ -259,3 +273,17 @@ addGeoJsonLayer("24海里範圍", 3860511);
 
 // ⭐ 新增 AOI 外部來源
 addExternalGeoJsonLayer("軍事航行警告區域", "https://n8n-ccit.serveray.org/webhook/aoi");
+
+
+function getProp(ent, key) {
+  const p = ent.properties?.[key];
+  if (!p) return "";
+  return (typeof p.getValue === "function") ? p.getValue(Cesium.JulianDate.now()) : p;
+}
+
+function linkify(url) {
+  if (!url) return "—";
+  const s = String(url).trim();
+  if (!/^https?:\/\//i.test(s)) return s; // 不是 http/https 就照文字
+  return `<a href="${s}" target="_blank" rel="noopener noreferrer">${s}</a>`;
+}

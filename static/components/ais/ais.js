@@ -443,15 +443,6 @@ async function loadLatestShips() {
 loadLatestShips();   // 所有船隻（最新一筆）
 loadCCGShips();      // 海警船（12nm 紅色、12–24nm 黃色）
 
-// 每 10分鐘 自動刷新
-// setInterval(() => {
-//     viewer.entities.removeAll();  // 先清空舊圖層
-//     loadLatestShips();
-//     loadCCGShips();
-// }, 600000);
-
-
-
 // ======== 畫框查詢 ========
 let points = [], drawEntities = [], clickCount = 0;
 const scene = viewer.scene;
@@ -532,33 +523,6 @@ function drawRectangle(p1, p2, color) {
         }
     });
 }
-
-// // 🎯 讓箭頭大小隨鏡頭縮放自動更新
-// viewer.camera.changed.addEventListener(() => {
-//     const height = viewer.scene.camera.positionCartographic.height;
-//     let scale = 1;
-
-//     if (height > 10_000_000) scale = 50;
-//     else if (height > 5_000_000) scale = 30;
-//     else if (height > 1_000_000) scale = 15;
-//     else if (height > 100_000) scale = 8;
-//     else scale = 3;
-
-//     viewer.entities.values.forEach(entity => {
-//         if (entity.polyline && entity.polyline.positions && entity.properties?.baseLength) {
-//             // 根據儲存的原始長度重新設定箭頭
-//             const ship = entity.properties; // 儲存的原始屬性
-//             const newArrow = getArrowPolyline(
-//                 parseFloat(ship.lon.getValue()),
-//                 parseFloat(ship.lat.getValue()),
-//                 parseFloat(ship.course.getValue()),
-//                 parseFloat(ship.baseLength.getValue()) * scale,
-//                 entity.polyline.material
-//             );
-//             entity.polyline.positions = newArrow.positions;
-//         }
-//     });
-// });
 
 
 // ======== 海警資訊面板 ========
